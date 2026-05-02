@@ -1,12 +1,16 @@
 name: Deploy to LMS
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]           # ← имя первого workflow (из ci.yml)
+    types:
+      - completed               # ← когда CI завершился
     branches:
-      - main
+      - main                    # ← только для main ветки
 
 jobs:
-  build:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}  # ← только если CI успешен
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.meta.outputs.tags }}
@@ -15,6 +19,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}  # ← используем тот же коммит, что и в CI
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -48,21 +54,16 @@ jobs:
           context: .
           platforms: linux/arm64,linux/amd64
           push: true
-          tags: ghcr.io/${{ steps.repo.outputs.repo }}:${{ github.sha }}
+          tags: ghcr.io/${{ steps.repo.outputs.repo }}:${{ github.event.workflow_run.head_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
       - name: Send deploy request
         run: |
           HTTP_CODE=$(curl -s -o response.txt -w "%{http_code}" -X POST \
             -H "Content-Type: application/json" \
             -H "X-API-Key: ${{ secrets.LMS_API_KEY }}" \
-            -d '{"image":"ghcr.io/${{ needs.build.outputs.repo }}:${{ github.sha }}","repository":"${{ github.repository }}"}' \
+            -d '{"image":"ghcr.io/${{ steps.repo.outputs.repo }}:${{ github.event.workflow_run.head_sha }}","repository":"${{ github.repository }}"}' \
             https://lms.python-labs.ru/api/deploy-requests)
 
           if [ "$HTTP_CODE" != "200" ]; then
